@@ -16,6 +16,47 @@
 #include "file.h"
 #include "fcntl.h"
 
+static struct inode*
+create(char *path, short type, short major, short minor);
+
+uint64 sys_symlink(void)
+{
+  char target[MAXPATH],path[MAXPATH];
+  struct inode* dp;
+  struct inode* ip;
+  //这个地方很奇怪，我认为后面dp和ip只用一个就够了，
+  //但是这样会有一个样例writebig通过不了，这里非常疑惑
+  if(argstr(0,target,MAXPATH)<0 || argstr(1,path,MAXPATH)<0)
+    return -1;
+  begin_op();
+
+  //if((dp=namei(target))!=0 && dp->type==T_DIR)
+  if((ip=namei(target))!=0 && ip->type==T_DIR)
+  {
+    //iunlockput(ip);
+    end_op();
+    return -1;
+  }
+
+  if((dp=create(path,T_SYMLINK,0,0))==0)
+  {
+    end_op();
+    return -1;
+  }
+
+  if((writei(dp,0,(uint64)target,0,MAXPATH))<MAXPATH)
+  {
+    iunlockput(dp);
+    end_op();
+    return -1;
+  }
+
+  iunlockput(dp);
+  end_op();
+  //printf("symlink finish\n");
+  return 0;
+
+}
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
 static int
@@ -315,7 +356,38 @@ sys_open(void)
       return -1;
     }
   }
+  struct inode *dp;
+  if(!(omode&O_NOFOLLOW))
+  {
+    //printf("cycle\n");
+    int i=0;
+    while(ip->type==T_SYMLINK)
+    {
+      if((readi(ip,0,(uint64)path,0,MAXPATH))<MAXPATH)
+      {
+        iunlockput(ip);
+        end_op();
+        return -1;
+      }
+      if((dp=namei(path))==0)
+      {
+        iunlockput(ip);
+        end_op();
+        return -1;
+      }
+      iunlockput(ip);
+      ip=dp;
+      ilock(ip);
 
+      i++;
+      if(i>=10)
+      {
+        iunlockput(ip);
+        end_op();
+        return -1;
+      }
+    }
+  }
   if(ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)){
     iunlockput(ip);
     end_op();
